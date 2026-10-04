@@ -1,0 +1,10 @@
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.venv/
+runs/
+
+.DS_Store
+references/
+*.pptx
+*.py.tmp

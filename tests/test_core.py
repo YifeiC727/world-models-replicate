@@ -1,0 +1,87 @@
+import numpy as np
+import torch
+
+from world_models.env import PixelCatcher
+from world_models.carracing_data import EpisodeChunkSampler, FrameDataset, split_episodes
+from world_models.carracing_env import preprocess_frame
+from world_models.models import VAE, MDNRNN, LinearController
+
+
+def test_environment_is_seeded_and_has_expected_api():
+    a, b = PixelCatcher(seed=7), PixelCatcher(seed=7)
+    oa, _ = a.reset(7); ob, _ = b.reset(7)
+    assert oa.shape == (64, 64, 3) and oa.dtype == np.uint8
+    assert np.array_equal(oa, ob)
+    for action in [0, 1, 2]:
+        oa, reward, terminated, truncated, _ = a.step(action)
+        assert np.isfinite(reward) and not truncated
+
+
+def test_model_shapes_and_finite_losses():
+    vae = VAE(latent_size=8); x = torch.rand(2, 3, 64, 64)
+    recon, mu, logvar = vae(x); loss, _ = vae.loss(recon, x, mu, logvar)
+    assert recon.shape == x.shape and mu.shape == (2, 8) and torch.isfinite(loss)
+    mdn = MDNRNN(latent_size=8, hidden_size=16, mixtures=3)
+    z = torch.randn(2, 5, 8); actions = torch.randint(0, 3, (2, 5))
+    assert torch.isfinite(mdn.nll(z, actions, torch.randn_like(z)))
+
+
+def test_controller_flat_parameter_round_trip():
+    c = LinearController(latent_size=8, hidden_size=16)
+    values = np.arange(c.parameter_count, dtype=np.float32) / 100
+    c.set_flat_parameters(values)
+    actual = torch.cat([p.detach().flatten() for p in c.parameters()]).numpy()
+    assert np.allclose(values, actual)
+
+
+def test_paper_carracing_shapes_and_preprocessing():
+    frame = np.zeros((96, 96, 3), dtype=np.uint8)
+    frame[:84] = 10
+    frame[84:] = 200
+    processed = preprocess_frame(frame, invert=True)
+    assert processed.shape == (64, 64, 3)
+    assert processed.dtype == np.uint8
+    assert np.all(processed == 245)  # HUD was cropped before resizing.
+    controller = LinearController(latent_size=32, hidden_size=256, action_size=3)
+    assert controller.parameter_count == 867
+
+
+def test_continuous_mdn_shapes():
+    model = MDNRNN(latent_size=32, action_size=3, hidden_size=16,
+                   mixtures=5, discrete_actions=False)
+    z = torch.randn(2, 7, 32)
+    actions = torch.randn(2, 7, 3)
+    logits, means, log_stds, _ = model(z, actions)
+    assert logits.shape == means.shape == log_stds.shape == (2, 7, 32, 5)
+    assert torch.isfinite(model.nll(z, actions, torch.randn_like(z)))
+
+
+def test_paper_parameter_counts():
+    vae = VAE(32)
+    mdn = MDNRNN(32, 3, 256, 5, discrete_actions=False)
+    assert sum(p.numel() for p in vae.parameters() if p.requires_grad) == 4_348_547
+    assert sum(p.numel() for p in mdn.parameters() if p.requires_grad) == 422_368
+
+
+def test_episode_chunk_sampler_covers_all_frames_once(tmp_path):
+    for episode, length in enumerate([5, 7, 3, 6]):
+        np.savez_compressed(tmp_path / f"episode_{episode:05d}.npz",
+                            observations=np.zeros((length, 64, 64, 3), dtype=np.uint8))
+    dataset = FrameDataset(tmp_path, cache_size=2)
+    order = list(EpisodeChunkSampler(dataset, chunk_size=2, seed=0))
+    assert sorted(order) == list(range(len(dataset)))
+    episodes = np.searchsorted(dataset.cumulative, order, side="right") - 1
+    seen, consumed = set(), 0
+    for episode in episodes:  # every chunk exhausts its episodes before the next begins
+        seen.add(int(episode)); consumed += 1
+        if consumed == sum(dataset.lengths[e] for e in seen):
+            assert len(seen) <= 2; seen, consumed = set(), 0
+    assert not seen
+
+
+def test_episode_split_is_disjoint_complete_and_deterministic():
+    names = [f"episode_{i:05d}.npz" for i in range(50)]
+    splits = split_episodes(names, .1, .1, seed=3)
+    assert [len(splits[k]) for k in ("train", "validation", "test")] == [40, 5, 5]
+    assert sorted(sum(splits.values(), [])) == names
+    assert splits == split_episodes(list(reversed(names)), .1, .1, seed=3)

@@ -1,0 +1,35 @@
+[experiment]
+seed = 0
+workdir = "runs/carracing-paper"
+
+[environment]
+episodes = 10000
+max_steps = 1000
+invert_colors = true
+
+[data]
+validation_fraction = 0.1
+test_fraction = 0.1
+
+[vae]
+latent_size = 32
+epochs = 10
+batch_size = 100
+learning_rate = 0.0001
+kl_tolerance = 0.5
+shuffle_chunk_episodes = 16
+
+[mdn]
+hidden_size = 256
+mixtures = 5
+sequence_length = 999
+epochs = 1
+batch_size = 100
+learning_rate = 0.001
+
+[controller]
+generations = 200
+population = 64
+episodes_per_candidate = 16
+evaluation_episodes = 100
+workers = 10

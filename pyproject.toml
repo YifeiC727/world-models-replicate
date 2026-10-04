@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "world-models-reproduction"
+version = "0.1.0"
+description = "A modern reproduction of Ha & Schmidhuber's World Models"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.24",
+  "pillow>=10",
+  "torch>=2.1",
+  "cma>=4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+carracing = ["gymnasium[box2d]>=1.0"]
+
+[tool.setuptools.packages.find]
+include = ["world_models*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

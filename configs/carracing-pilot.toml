@@ -1,0 +1,35 @@
+[experiment]
+seed = 42
+workdir = "runs/carracing-pilot"
+
+[environment]
+episodes = 50
+max_steps = 1000
+invert_colors = true
+
+[data]
+validation_fraction = 0.1
+test_fraction = 0.1
+
+[vae]
+latent_size = 32
+epochs = 3
+batch_size = 64
+learning_rate = 0.0001
+kl_tolerance = 0.5
+shuffle_chunk_episodes = 16
+
+[mdn]
+hidden_size = 256
+mixtures = 5
+sequence_length = 128
+epochs = 5
+batch_size = 8
+learning_rate = 0.001
+
+[controller]
+generations = 5
+population = 8
+episodes_per_candidate = 2
+evaluation_episodes = 10
+workers = 6

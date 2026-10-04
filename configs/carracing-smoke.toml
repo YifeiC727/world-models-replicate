@@ -1,0 +1,35 @@
+[experiment]
+seed = 0
+workdir = "runs/carracing-smoke"
+
+[environment]
+episodes = 3
+max_steps = 64
+invert_colors = true
+
+[data]
+validation_fraction = 0.1
+test_fraction = 0.1
+
+[vae]
+latent_size = 32
+epochs = 1
+batch_size = 16
+learning_rate = 0.0001
+kl_tolerance = 0.5
+shuffle_chunk_episodes = 16
+
+[mdn]
+hidden_size = 256
+mixtures = 5
+sequence_length = 16
+epochs = 1
+batch_size = 2
+learning_rate = 0.001
+
+[controller]
+generations = 1
+population = 4
+episodes_per_candidate = 1
+evaluation_episodes = 3
+workers = 1
