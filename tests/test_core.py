@@ -85,3 +85,17 @@ def test_episode_split_is_disjoint_complete_and_deterministic():
     assert [len(splits[k]) for k in ("train", "validation", "test")] == [40, 5, 5]
     assert sorted(sum(splits.values(), [])) == names
     assert splits == split_episodes(list(reversed(names)), .1, .1, seed=3)
+
+
+def test_collection_is_resumable_and_independent_of_workers(tmp_path):
+    from world_models.carracing_data import collect_rollouts
+    serial = collect_rollouts(tmp_path / "a", episodes=2, seed=5, max_steps=20)
+    parallel = collect_rollouts(tmp_path / "b", episodes=2, seed=5, max_steps=20, workers=2)
+    assert serial == parallel
+    for name in ("episode_00000.npz", "episode_00001.npz"):
+        with np.load(tmp_path / "a" / name) as a, np.load(tmp_path / "b" / name) as b:
+            assert np.array_equal(a["observations"], b["observations"])
+    before = (tmp_path / "a" / "episode_00000.npz").stat().st_mtime_ns
+    assert collect_rollouts(tmp_path / "a", episodes=2, seed=5, max_steps=20) == serial
+    assert (tmp_path / "a" / "episode_00000.npz").stat().st_mtime_ns == before
+    assert not list((tmp_path / "a").glob("tmp_*"))

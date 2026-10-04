@@ -12,27 +12,50 @@ from .carracing_env import CarRacingAdapter, CorrelatedRandomPolicy
 from .data import frames_to_tensor
 
 
-def collect_rollouts(root, episodes=10, seed=0, max_steps=1000, invert=True):
+def _collect_episode(job):
+    root, episode, episode_seed, max_steps, invert = job
+    path = root / f"episode_{episode:05d}.npz"
+    if path.exists():  # finished earlier; files appear atomically, so they are complete
+        with np.load(path) as data: steps = len(data["actions"])
+        return {"file": path.name, "seed": episode_seed, "steps": steps}, None
+    env = CarRacingAdapter(seed=episode_seed, invert=invert, max_steps=max_steps)
+    policy = CorrelatedRandomPolicy(episode_seed)
+    obs, _ = env.reset(episode_seed)
+    observations, actions, rewards = [obs], [], []
+    terminated = truncated = False
+    while not (terminated or truncated):
+        action = policy(obs)
+        obs, reward, terminated, truncated, _ = env.step(action)
+        observations.append(obs); actions.append(action); rewards.append(reward)
+    env.close()
+    partial = path.with_name("tmp_" + path.name)  # not matched by episode_*.npz
+    np.savez_compressed(partial, observations=np.asarray(observations, dtype=np.uint8),
+                        actions=np.asarray(actions, dtype=np.float32),
+                        rewards=np.asarray(rewards, dtype=np.float32), seed=episode_seed)
+    partial.replace(path)
+    return {"file": path.name, "seed": episode_seed, "steps": len(actions)}, float(sum(rewards))
+
+
+def collect_rollouts(root, episodes=10, seed=0, max_steps=1000, invert=True, workers=1):
+    """Collect random-policy episodes; reruns skip finished files, so it is resumable.
+
+    Episode ``i`` always uses seed ``seed + i``, so the data do not depend on ``workers``.
+    """
     root = Path(root); root.mkdir(parents=True, exist_ok=True)
+    jobs = [(root, episode, seed + episode, max_steps, invert) for episode in range(episodes)]
+    if workers > 1:
+        import multiprocessing as mp
+        pool = mp.get_context("spawn").Pool(workers)
+        results = pool.imap_unordered(_collect_episode, jobs, chunksize=1)
+    else:
+        pool = None; results = map(_collect_episode, jobs)
     manifest = []
-    for episode in range(episodes):
-        episode_seed = seed + episode
-        env = CarRacingAdapter(seed=episode_seed, invert=invert, max_steps=max_steps)
-        policy = CorrelatedRandomPolicy(episode_seed)
-        obs, _ = env.reset(episode_seed)
-        observations, actions, rewards = [obs], [], []
-        terminated = truncated = False
-        while not (terminated or truncated):
-            action = policy(obs)
-            obs, reward, terminated, truncated, _ = env.step(action)
-            observations.append(obs); actions.append(action); rewards.append(reward)
-        env.close()
-        path = root / f"episode_{episode:05d}.npz"
-        np.savez_compressed(path, observations=np.asarray(observations, dtype=np.uint8),
-                            actions=np.asarray(actions, dtype=np.float32),
-                            rewards=np.asarray(rewards, dtype=np.float32), seed=episode_seed)
-        manifest.append({"file": path.name, "seed": episode_seed, "steps": len(actions)})
-        print(f"collect episode={episode+1}/{episodes} steps={len(actions)} reward={sum(rewards):.2f}")
+    for done, (entry, reward) in enumerate(results, 1):
+        manifest.append(entry)
+        status = "skipped" if reward is None else f"reward={reward:.2f}"
+        print(f"collect {done}/{episodes} {entry['file']} steps={entry['steps']} {status}")
+    if pool: pool.close(); pool.join()
+    manifest.sort(key=lambda entry: entry["file"])
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
 

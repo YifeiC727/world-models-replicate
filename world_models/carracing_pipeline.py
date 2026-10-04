@@ -121,17 +121,21 @@ def encode_rollouts(config, device):
     root, record, series = paths(config); series.mkdir(parents=True, exist_ok=True)
     checkpoint = torch.load(root / "vae.pt", map_location=device)
     model = VAE(checkpoint["latent"]).to(device); model.load_state_dict(checkpoint["state_dict"]); model.eval()
+    vae_time = (root / "vae.pt").stat().st_mtime
     for index, path in enumerate(sorted(record.glob("episode_*.npz"))):
+        target = series / path.name
+        if target.exists() and target.stat().st_mtime > vae_time: continue  # encoded by this VAE
         data = np.load(path); obs = data["observations"]; mus, logvars = [], []
         for start in range(0, len(obs), 256):
             mu, logvar = model.encode(frames_to_tensor(obs[start:start+256], device))
             mus.append(mu.cpu().numpy()); logvars.append(logvar.cpu().numpy())
-        np.savez_compressed(series / path.name,
+        partial = series / ("tmp_" + path.name)  # not matched by episode_*.npz
+        np.savez_compressed(partial,
                             mu=np.concatenate(mus).astype(np.float16),
                             logvar=np.concatenate(logvars).astype(np.float16),
                             actions=data["actions"].astype(np.float16),
                             rewards=data["rewards"].astype(np.float16), seed=data["seed"])
-        print(f"encode episode={index+1} frames={len(obs)}")
+        partial.replace(target); print(f"encode episode={index+1} frames={len(obs)}")
 
 
 def train_mdn(config, device, resume=False):
@@ -297,13 +301,13 @@ def main():
     parser.add_argument("--device", default="auto"); parser.add_argument("--no-memory", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--workers", type=int, default=None,
-                        help="CPU processes for controller rollouts (default: controller.workers or 1)")
+                        help="CPU processes for collection and controller rollouts (default: controller.workers or 1)")
     args = parser.parse_args(); config = load_config(args.config); device = device_name(args.device)
     root, record, _ = paths(config); root.mkdir(parents=True, exist_ok=True)
     workers = args.workers or config["controller"].get("workers", 1)
     commands = ["collect", "vae", "encode", "mdn", "heldout", "controller", "evaluate"] if args.command == "all" else [args.command]
     for command in commands:
-        if command == "collect": collect_rollouts(record, config["environment"]["episodes"], config["experiment"]["seed"], config["environment"]["max_steps"], config["environment"]["invert_colors"])
+        if command == "collect": collect_rollouts(record, config["environment"]["episodes"], config["experiment"]["seed"], config["environment"]["max_steps"], config["environment"]["invert_colors"], workers)
         elif command == "vae": train_vae(config, device, args.resume)
         elif command == "encode": encode_rollouts(config, device)
         elif command == "mdn": train_mdn(config, device, args.resume)

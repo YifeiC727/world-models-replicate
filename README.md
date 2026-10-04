@@ -68,6 +68,28 @@ CMA-ES fitness and evaluation rollouts run on `--workers N` CPU processes (defau
 `controller.workers`). Each rollout seeds torch from its environment seed, so the
 results are identical to a serial run.
 
+## MLDS server (mlds-deepdish1)
+
+One-time setup creates a private conda env in `~/envs/wm` (nothing system-wide):
+
+```bash
+bash scripts/setup_server.sh
+python scripts/benchmark.py --workers 1 6 10 12   # optional: measure throughput
+```
+
+Then run inside `tmux`; every stage resumes if rerun after an interruption:
+
+```bash
+bash scripts/run_server.sh world           # collect, V, M, held-out metrics
+bash scripts/run_server.sh controller vm   # then the V-only ablation: controller v
+```
+
+`configs/carracing-deepdish.toml` keeps the paper's data, V and M settings but
+reduces the controller search to 32 x 8 x 100 generations. Measured on the
+server's 6 physical cores, the paper's 64 x 16 x 200 would take about 5 days per
+mode (~1,700 rollouts/hour with 6 workers). Jobs run under `nice` on one GPU
+(`GPU=1` selects another).
+
 ## Methodology
 
 1. Collect pixel observations using a random policy.
