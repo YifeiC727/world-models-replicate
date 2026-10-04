@@ -84,11 +84,38 @@ bash scripts/run_server.sh world           # collect, V, M, held-out metrics
 bash scripts/run_server.sh controller vm   # then the V-only ablation: controller v
 ```
 
-`configs/carracing-deepdish.toml` keeps the paper's data, V and M settings but
-reduces the controller search to 32 x 8 x 100 generations. Measured on the
-server's 6 physical cores, the paper's 64 x 16 x 200 would take about 5 days per
-mode (~1,700 rollouts/hour with 6 workers). Jobs run under `nice` on one GPU
+`configs/carracing-deepdish.toml` uses the reference settings but starts with 50
+CMA-ES generations: one generation is 1,024 rollouts, about 0.6 h on the server's
+6 physical cores (~1,700 rollouts/hour), so the reference's 1,800 would take ~44
+days per mode. Extend by raising `generations` and rerunning (it resumes). Jobs run under `nice` on one GPU
 (`GPU=1` selects another).
+
+## Alignment with the reference implementation
+
+Checked against `hardmaru/WorldModelsExperiments/carracing` (cloned to `references/`, not
+committed). `configs/carracing-paper.toml` is the full reference; `carracing-deepdish.toml`
+differs only in CMA-ES generations.
+
+| Component | Reference | This repo |
+|---|---|---|
+| Frames | crop 84 rows, resize 64x64, invert | same (PIL bilinear) |
+| Data | 10,000 episodes, termination ignored, 1000 frames | same |
+| Random policy | random V/M/C with Cauchy x U(0, 0.01) weights | **smooth random controls** (see below) |
+| V | conv VAE, z=32, 10 epochs, batch 100, lr 1e-4, KL tolerance 0.5 | same; shuffle in 200-episode chunks instead of globally |
+| M | LSTM 256, 5 mixtures per dim, seq 999, batch 100, lr 1e-3, clip 1.0, 4000 steps | same (50 epochs x 80 steps); 80/10/10 episode split added |
+| C | linear on [z, h], 867 params, tanh / (x+1)/2 / clip | same |
+| CMA-ES | pop 64 x 16 episodes, sigma 0.1, weight decay 0.01, antithetic seeds | same |
+| Model selection | CMA mean scored on 1024 tracks every 25 generations, keep best | same |
+| Generations | 1800 (validation 822.9 @25, 867.5 @50, 880.4 @200, 900.5 @1800) | 1800 in paper config; 50+ on deepdish |
+| Test | mean over 100 random tracks | 100 fixed seeds |
+| Environment | gym 0.9.4 CarRacing | Gymnasium CarRacing-v3 |
+
+**Random policy deviation.** Ported faithfully, the reference random policy overflows: the
+Cauchy-weighted random VAE gives log-variances of 1e3-1e5, so `exp(logvar/2)` is infinite in
+the reference's float32 and the actions become NaN. How gym 0.9.4 handled NaN actions cannot be
+checked now. Saturating instead of propagating NaN (`collection_policy = "reference"`) overflowed
+in 11 of 12 real episodes and braked about half the time, so the car barely moves. We therefore
+collect with `CorrelatedRandomPolicy` (piecewise-constant random steering/gas, rare braking).
 
 ## Methodology
 

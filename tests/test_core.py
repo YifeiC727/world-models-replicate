@@ -99,3 +99,14 @@ def test_collection_is_resumable_and_independent_of_workers(tmp_path):
     assert collect_rollouts(tmp_path / "a", episodes=2, seed=5, max_steps=20) == serial
     assert (tmp_path / "a" / "episode_00000.npz").stat().st_mtime_ns == before
     assert not list((tmp_path / "a").glob("tmp_*"))
+
+
+def test_reference_random_policy_actions_are_finite_and_in_range():
+    from world_models.carracing_env import ReferenceRandomPolicy
+    rng = np.random.default_rng(0)
+    for seed in range(5):
+        policy = ReferenceRandomPolicy(seed)
+        for _ in range(3):
+            action = policy(rng.integers(0, 256, (64, 64, 3), dtype=np.uint8))
+            assert np.isfinite(action).all()
+            assert -1 <= action[0] <= 1 and 0 <= action[1] <= 1 and 0 <= action[2] <= 1

@@ -258,28 +258,62 @@ class RolloutPool:
 
 
 def train_controller(config, device, use_memory=True, resume=False, workers=1):
+    """CMA-ES following the reference train.py (optimizer 'cma', 64 x 16 episodes).
+
+    - Antithetic seeding: both halves of the population share episode seeds.
+    - Fitness is mean reward minus ``weight_decay * mean(params**2)``.
+    - Every ``eval_every`` generations the CMA mean is scored on ``eval_rollouts``
+      fixed validation tracks; the best such mean is saved as the controller.
+    """
     import cma
-    root, _, _ = paths(config); settings = config["controller"]
+    import time
+    root, _, _ = paths(config); settings = config["controller"]; seed = config["experiment"]["seed"]
+    population, episodes = settings["population"], settings["episodes_per_candidate"]
+    antithetic = settings.get("antithetic", True); decay = settings.get("weight_decay", .01)
+    eval_every = settings.get("eval_every", 25)
+    eval_rollouts = settings.get("eval_rollouts", population * episodes)
+    if antithetic and population % 2: raise ValueError("antithetic seeding needs an even population")
     controller = LinearController(config["vae"]["latent_size"], config["mdn"]["hidden_size"], 3, use_memory)
     suffix = "vm" if use_memory else "v"
     state_path = root / f"controller_{suffix}_cma.pkl"; result_path = root / f"controller_{suffix}.npy"
+    log_path = root / f"controller_{suffix}_log.json"
     if resume and state_path.exists():
-        with open(state_path, "rb") as stream: es, start = pickle.load(stream)
+        with open(state_path, "rb") as stream: state = pickle.load(stream)
     else:
-        es = cma.CMAEvolutionStrategy(np.zeros(controller.parameter_count), .1,
-                                      {"popsize": settings["population"], "seed": config["experiment"]["seed"]})
-        start = 0
+        es = cma.CMAEvolutionStrategy(np.zeros(controller.parameter_count), settings.get("sigma_init", .1),
+                                      {"popsize": population, "seed": seed + 1})  # cma treats seed 0 as random
+        state = {"es": es, "generation": 0, "seeder": np.random.RandomState(seed),
+                 "best": None, "history": [], "evaluations": [], "seconds": 0.}
+    es = state["es"]
     with RolloutPool(config, device, use_memory, workers) as pool:
-        for generation in range(start, settings["generations"]):
-            candidates = es.ask(); episodes = settings["episodes_per_candidate"]
-            jobs = [(params, config["experiment"]["seed"] + generation*100000 + candidate_index*1000 + ep)
-                    for candidate_index, params in enumerate(candidates) for ep in range(episodes)]
-            scores = np.asarray(pool.map(jobs)).reshape(len(candidates), episodes)
-            fitness = (-scores.mean(1)).tolist()
-            es.tell(candidates, fitness); np.save(result_path, np.asarray(es.result.xbest))
-            with open(state_path, "wb") as stream: pickle.dump((es, generation+1), stream)
-            print(f"controller mode={suffix} generation={generation+1} best_reward={-min(fitness):.3f} "
-                  f"mean_reward={-np.mean(fitness):.3f}")
+        for generation in range(state["generation"], settings["generations"]):
+            started = time.time(); candidates = np.asarray(es.ask())
+            # Training tracks come from seeds >= 1e7, disjoint from validation and test tracks.
+            base = state["seeder"].randint(10_000_000, 2**31 - 1 - episodes,
+                                           size=population // 2 if antithetic else population)
+            if antithetic: base = np.concatenate([base, base])
+            jobs = [(params, int(b) + k) for params, b in zip(candidates, base) for k in range(episodes)]
+            rewards = np.asarray(pool.map(jobs)).reshape(population, episodes).mean(1)
+            penalty = decay * np.mean(np.square(candidates), axis=1)
+            es.tell(list(candidates), (-(rewards - penalty)).tolist())
+            g = generation + 1
+            if g % eval_every == 0 or g == settings["generations"]:
+                mean = np.asarray(es.mean).round(4)
+                validation = float(np.mean(pool.map([(mean, 2_000_000 + i) for i in range(eval_rollouts)])))
+                state["evaluations"].append([g, validation])
+                if state["best"] is None or validation > state["best"][1]:
+                    state["best"] = (mean, validation); np.save(result_path, mean)
+                print(f"controller mode={suffix} generation={g} validation_reward={validation:.3f} "
+                      f"best_validation={state['best'][1]:.3f} over {eval_rollouts} tracks")
+            state["seconds"] += time.time() - started
+            state["history"].append([g, round(state["seconds"]), float(rewards.mean()), float(rewards.min()),
+                                     float(rewards.max()), float(rewards.std()), float(es.sigma)])
+            state["generation"] = g
+            with open(state_path, "wb") as stream: pickle.dump(state, stream)
+            log_path.write_text(json.dumps({"columns": ["generation", "seconds", "mean", "min", "max", "std", "sigma"],
+                                            "history": state["history"], "evaluations": state["evaluations"]}) + "\n")
+            print(f"controller mode={suffix} generation={g} mean_reward={rewards.mean():.3f} "
+                  f"max_reward={rewards.max():.3f} sigma={es.sigma:.4f}")
 
 
 def evaluate(config, device, use_memory=True, workers=1):
@@ -306,8 +340,10 @@ def main():
     root, record, _ = paths(config); root.mkdir(parents=True, exist_ok=True)
     workers = args.workers or config["controller"].get("workers", 1)
     commands = ["collect", "vae", "encode", "mdn", "heldout", "controller", "evaluate"] if args.command == "all" else [args.command]
+    env = config["environment"]
     for command in commands:
-        if command == "collect": collect_rollouts(record, config["environment"]["episodes"], config["experiment"]["seed"], config["environment"]["max_steps"], config["environment"]["invert_colors"], workers)
+        if command == "collect": collect_rollouts(record, env["episodes"], config["experiment"]["seed"], env["max_steps"], env["invert_colors"], workers,
+                                                         env.get("collection_policy", "correlated"), env.get("collection_full_episode", False))
         elif command == "vae": train_vae(config, device, args.resume)
         elif command == "encode": encode_rollouts(config, device)
         elif command == "mdn": train_mdn(config, device, args.resume)

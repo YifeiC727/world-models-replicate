@@ -8,18 +8,21 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from .carracing_env import CarRacingAdapter, CorrelatedRandomPolicy
+from .carracing_env import CarRacingAdapter, CorrelatedRandomPolicy, ReferenceRandomPolicy
+
+POLICIES = {"correlated": CorrelatedRandomPolicy, "reference": ReferenceRandomPolicy}
 from .data import frames_to_tensor
 
 
 def _collect_episode(job):
-    root, episode, episode_seed, max_steps, invert = job
+    root, episode, episode_seed, max_steps, invert, policy, full_episode = job
     path = root / f"episode_{episode:05d}.npz"
     if path.exists():  # finished earlier; files appear atomically, so they are complete
         with np.load(path) as data: steps = len(data["actions"])
         return {"file": path.name, "seed": episode_seed, "steps": steps}, None
-    env = CarRacingAdapter(seed=episode_seed, invert=invert, max_steps=max_steps)
-    policy = CorrelatedRandomPolicy(episode_seed)
+    env = CarRacingAdapter(seed=episode_seed, invert=invert, max_steps=max_steps,
+                           ignore_termination=full_episode)
+    policy = POLICIES[policy](episode_seed)
     obs, _ = env.reset(episode_seed)
     observations, actions, rewards = [obs], [], []
     terminated = truncated = False
@@ -36,13 +39,15 @@ def _collect_episode(job):
     return {"file": path.name, "seed": episode_seed, "steps": len(actions)}, float(sum(rewards))
 
 
-def collect_rollouts(root, episodes=10, seed=0, max_steps=1000, invert=True, workers=1):
+def collect_rollouts(root, episodes=10, seed=0, max_steps=1000, invert=True, workers=1,
+                     policy="correlated", full_episode=False):
     """Collect random-policy episodes; reruns skip finished files, so it is resumable.
 
     Episode ``i`` always uses seed ``seed + i``, so the data do not depend on ``workers``.
     """
     root = Path(root); root.mkdir(parents=True, exist_ok=True)
-    jobs = [(root, episode, seed + episode, max_steps, invert) for episode in range(episodes)]
+    jobs = [(root, episode, seed + episode, max_steps, invert, policy, full_episode)
+            for episode in range(episodes)]
     if workers > 1:
         import multiprocessing as mp
         pool = mp.get_context("spawn").Pool(workers)

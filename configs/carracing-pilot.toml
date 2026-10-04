@@ -32,4 +32,6 @@ generations = 5
 population = 8
 episodes_per_candidate = 2
 evaluation_episodes = 10
+eval_every = 5
+eval_rollouts = 16
 workers = 6

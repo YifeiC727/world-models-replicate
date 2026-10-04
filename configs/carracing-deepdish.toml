@@ -1,5 +1,5 @@
-# mlds-deepdish1: paper-scale data, V and M; reduced controller search (6 physical cores).
-# Paper controller: population 64 x 16 episodes x 200 generations (~5 days/mode here).
+# mlds-deepdish1: reference settings throughout; only the number of CMA-ES generations
+# is cut (1800 -> 50 to start) because the server has 6 physical cores, not 64.
 
 [experiment]
 seed = 0
@@ -9,6 +9,11 @@ workdir = "runs/carracing-deepdish"
 episodes = 10000
 max_steps = 1000
 invert_colors = true
+# Reference extract.py ignores termination and always records 1000 frames. Its random
+# policy (Cauchy-weighted random V/M/C, "reference") overflows in float32 and mostly
+# brakes in a modern stack, so we collect with smooth random controls ("correlated").
+collection_policy = "correlated"
+collection_full_episode = true
 
 [data]
 validation_fraction = 0.1
@@ -20,7 +25,8 @@ epochs = 10
 batch_size = 100
 learning_rate = 0.0001
 kl_tolerance = 0.5
-shuffle_chunk_episodes = 16
+# Reference shuffles all frames globally; 200 episodes (~2.4 GB) per shuffle chunk.
+shuffle_chunk_episodes = 200
 
 [mdn]
 hidden_size = 256
@@ -32,8 +38,17 @@ batch_size = 100
 learning_rate = 0.001
 
 [controller]
-generations = 100
-population = 32
-episodes_per_candidate = 8
+# Reference train.py: cma, population 64 x 16 episodes, sigma 0.1, weight decay 0.01,
+# antithetic seeds, CMA mean scored on 1024 tracks every 25 generations.
+# The reference ran 1800 generations (validation 822.9 at 25, 867.5 at 50, 900.5 at 1800).
+# At ~0.6 h/generation here, start with 50 and extend by raising this and using --resume.
+generations = 50
+population = 64
+episodes_per_candidate = 16
+sigma_init = 0.1
+weight_decay = 0.01
+antithetic = true
+eval_every = 25
+eval_rollouts = 1024
 evaluation_episodes = 100
 workers = 6
