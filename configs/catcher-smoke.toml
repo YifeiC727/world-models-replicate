@@ -1,0 +1,42 @@
+# Plumbing check only.
+[experiment]
+seed = 0
+workdir = "runs/catcher-smoke"
+
+[environment]
+episodes = 12
+horizon = 300
+wind_range = 0.08
+fog_y = 25
+random_persistence = 8
+
+[data]
+validation_fraction = 0.17
+test_fraction = 0.17
+
+[vae]
+latent_size = 32
+epochs = 1
+batch_size = 64
+learning_rate = 0.0001
+kl_tolerance = 0.5
+shuffle_chunk_episodes = 16
+
+[mdn]
+hidden_size = 256
+mixtures = 5
+epochs = 2
+batch_size = 4
+learning_rate = 0.001
+event_weight = 10.0
+
+[controller]
+generations = 2
+population = 4
+episodes_per_candidate = 2
+sigma_init = 0.1
+weight_decay = 0.01
+eval_every = 1
+eval_rollouts = 4
+evaluation_episodes = 4
+workers = 2

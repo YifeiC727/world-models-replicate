@@ -61,7 +61,7 @@ class MDNRNN(nn.Module):
     """LSTM predicting a diagonal Gaussian mixture for the next latent state."""
 
     def __init__(self, latent_size=32, action_size=3, hidden_size=256, mixtures=5,
-                 discrete_actions=True):
+                 discrete_actions=True, event_classes=0):
         super().__init__()
         self.latent_size, self.action_size = latent_size, action_size
         self.hidden_size, self.mixtures = hidden_size, mixtures
@@ -76,8 +76,11 @@ class MDNRNN(nn.Module):
         # The reference implementation predicts an independent K-component
         # mixture for every scalar latent dimension.
         self.head = nn.Linear(hidden_size, latent_size * mixtures * 3)
+        # Optional classifier for what the step yielded (e.g. miss / nothing / catch), so
+        # a learned "dream" can hand out rewards, like the done head of the Doom model.
+        self.event_head = nn.Linear(hidden_size, event_classes) if event_classes else None
 
-    def forward(self, z, actions, hidden=None):
+    def forward(self, z, actions, hidden=None, return_events=False):
         if self.discrete_actions:
             actions = F.one_hot(actions.long(), self.action_size).float()
         else:
@@ -87,10 +90,16 @@ class MDNRNN(nn.Module):
         out, hidden = self.rnn(torch.cat((z, actions), dim=-1), hidden)
         raw = self.head(out).view(*z.shape[:2], self.latent_size, 3 * self.mixtures)
         logits, mu, log_sigma = torch.split(raw, self.mixtures, dim=-1)
+        if return_events:
+            return logits, mu, log_sigma.clamp(-7, 7), hidden, self.event_head(out)
         return logits, mu, log_sigma.clamp(-7, 7), hidden
 
     def nll(self, z, actions, target):
         logits, mu, log_sigma, _ = self(z, actions)
+        return self.mixture_nll(logits, mu, log_sigma, target)
+
+    @staticmethod
+    def mixture_nll(logits, mu, log_sigma, target):
         target = target.unsqueeze(-1)
         component = -.5 * (((target-mu)/log_sigma.exp()).square()
                             + 2*log_sigma + math.log(2*math.pi))
@@ -108,10 +117,10 @@ class MDNRNN(nn.Module):
 
 
 class LinearController(nn.Module):
-    def __init__(self, latent_size=16, hidden_size=128, action_size=3, use_memory=True):
+    def __init__(self, latent_size=16, hidden_size=128, action_size=3, use_memory=True, bias=True):
         super().__init__()
         self.use_memory = use_memory
-        self.linear = nn.Linear(latent_size + (hidden_size if use_memory else 0), action_size)
+        self.linear = nn.Linear(latent_size + (hidden_size if use_memory else 0), action_size, bias=bias)
 
     def forward(self, z, h=None):
         x = torch.cat((z, h), -1) if self.use_memory else z

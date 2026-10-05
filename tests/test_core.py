@@ -110,3 +110,22 @@ def test_reference_random_policy_actions_are_finite_and_in_range():
             action = policy(rng.integers(0, 256, (64, 64, 3), dtype=np.uint8))
             assert np.isfinite(action).all()
             assert -1 <= action[0] <= 1 and 0 <= action[1] <= 1 and 0 <= action[2] <= 1
+
+
+def test_pixelcatcher_wind_and_fog():
+    from world_models.env import PixelCatcherConfig
+    assert PixelCatcher(seed=3).wind == 0.0  # defaults unchanged
+    env = PixelCatcher(PixelCatcherConfig(wind_range=0.08, fog_y=25), seed=3)
+    assert 0 < abs(env.wind) <= 0.08
+    ball = np.array([245, 210, 45], dtype=np.uint8)
+    for _ in range(40):
+        frame, _, _, _, info = env.step(1)
+        assert info["wind"] == env.wind
+        visible = (frame == ball).all(-1).any()
+        assert visible == (int(round(env.ball_y)) < 25)
+
+
+def test_catcher_action_mapping_matches_reference_thresholds():
+    from world_models.catcher_pipeline import to_action
+    out = to_action(torch.atanh(torch.tensor([[-.5], [-.2], [0.], [.2], [.5]])))
+    assert out.tolist() == [0, 1, 1, 1, 2]

@@ -1,0 +1,45 @@
+# Hidden wind + fog PixelCatcher; V/M/C sizes as in the CarRacing experiment.
+[experiment]
+seed = 0
+workdir = "runs/catcher"
+
+[environment]
+episodes = 1000
+horizon = 300
+wind_range = 0.08
+fog_y = 25
+random_persistence = 8
+
+[data]
+validation_fraction = 0.1
+test_fraction = 0.1
+
+[vae]
+latent_size = 32
+epochs = 10
+batch_size = 100
+learning_rate = 0.0001
+kl_tolerance = 0.5
+shuffle_chunk_episodes = 200
+
+[mdn]
+hidden_size = 256
+mixtures = 5
+# 800 train episodes / batch 32 = 25 steps per epoch; 160 epochs = 4000 steps as in the reference.
+epochs = 160
+batch_size = 32
+learning_rate = 0.001
+# Up-weights the rare catch/miss steps, like restart_factor = 10 in the reference Doom code.
+event_weight = 10.0
+
+[controller]
+# Reference: cma, population 64 x 16 episodes, sigma 0.1, weight decay 0.01.
+generations = 50
+population = 64
+episodes_per_candidate = 16
+sigma_init = 0.1
+weight_decay = 0.01
+eval_every = 10
+eval_rollouts = 256
+evaluation_episodes = 200
+workers = 6
