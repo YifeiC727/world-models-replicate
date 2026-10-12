@@ -111,23 +111,32 @@ def _sample_z(series, idx, generator=None):
     return mu + torch.randn(mu.shape, generator=generator) * torch.exp(.5 * logvar)
 
 
-def mdn_losses(model, series, idx, device, event_weight, generator=None):
+def event_weights(settings):
+    """[miss, none, catch] loss weights; a scalar weights both rare classes equally."""
+    w = settings.get("event_weights") or [settings["event_weight"], 1., settings["event_weight"]]
+    return torch.tensor(w, dtype=torch.float32)
+
+
+def mdn_losses(model, series, idx, device, weights, generator=None):
     z = _sample_z(series, idx, generator).to(device)
     actions, events = series["actions"][idx].to(device), series["events"][idx].to(device)
     logits, mu, log_sigma, _, event_logits = model(z[:, :-1], actions, return_events=True)
     nll = MDNRNN.mixture_nll(logits, mu, log_sigma, z[:, 1:])
-    weights = torch.tensor([event_weight, 1., event_weight], device=device)
-    ce = F.cross_entropy(event_logits.reshape(-1, EVENTS), events.reshape(-1), weight=weights)
-    return nll, ce, event_logits.argmax(-1), events
+    ce = F.cross_entropy(event_logits.reshape(-1, EVENTS), events.reshape(-1), weight=weights.to(device))
+    return nll, ce, event_logits, events
 
 
 @torch.no_grad()
-def mdn_metrics(model, series, device, event_weight):
-    """Deterministic z sample; event recall per class shows whether catches/misses are predicted."""
+def mdn_metrics(model, series, device, weights):
+    """Deterministic z sample. Besides argmax recall, report the mean predicted catch
+    probability on steps that were really catches vs misses: the dream samples events,
+    so this gap is what turns into a reward signal for catching."""
     model.eval(); idx = torch.arange(len(series["mu"]))
-    nll, ce, pred, true = mdn_losses(model, series, idx, device, event_weight, torch.Generator().manual_seed(0))
+    nll, ce, logits, true = mdn_losses(model, series, idx, device, weights, torch.Generator().manual_seed(0))
+    pred, prob = logits.argmax(-1), torch.softmax(logits, -1)
     recall = {name: float((pred[true == c] == c).float().mean()) for c, name in enumerate(["miss", "none", "catch"])}
-    return {"nll": float(nll), "event_ce": float(ce), **{f"recall_{k}": v for k, v in recall.items()}}
+    return {"nll": float(nll), "event_ce": float(ce), **{f"recall_{k}": v for k, v in recall.items()},
+            "p_catch_on_catch": float(prob[..., 2][true == 2].mean()), "p_catch_on_miss": float(prob[..., 2][true == 0].mean())}
 
 
 def train_mdn(config, device):
@@ -141,11 +150,11 @@ def train_mdn(config, device):
         model.train(); order = torch.randperm(len(train["mu"])); totals = np.zeros(2)
         for start in range(0, len(order), s["batch_size"]):
             idx = order[start:start + s["batch_size"]]
-            nll, ce, _, _ = mdn_losses(model, train, idx, device, s["event_weight"])
+            nll, ce, _, _ = mdn_losses(model, train, idx, device, event_weights(s))
             optimizer.zero_grad(); (nll + ce).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); optimizer.step()
             totals += np.array([nll.item(), ce.item()]) * len(idx)
-        totals /= len(order); val = mdn_metrics(model, validation, device, s["event_weight"])
+        totals /= len(order); val = mdn_metrics(model, validation, device, event_weights(s))
         print(f"mdn epoch={epoch+1} nll={totals[0]:.4f} event_ce={totals[1]:.4f} "
               + " ".join(f"val_{k}={v:.4f}" for k, v in val.items()))
     torch.save({"state_dict": model.state_dict(), "latent": config["vae"]["latent_size"],
@@ -164,7 +173,7 @@ def heldout(config, device):
     baseline = float((.5 * (zt.diff(dim=1).square() / var + var.log() + math.log(2 * math.pi))).mean())
     result = {"episodes": {k: len(v) for k, v in splits.items()},
               "vae_test": vae_metrics(vae, FrameDataset(split_files(record, splits["test"])), device),
-              "mdn_test": mdn_metrics(mdn, test, device, config["mdn"]["event_weight"]),
+              "mdn_test": mdn_metrics(mdn, test, device, event_weights(config["mdn"])),
               "baseline_random_walk_test_nll": baseline}
     (root / "heldout.json").write_text(json.dumps(result, indent=2) + "\n"); print(json.dumps(result, indent=2))
 

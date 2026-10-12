@@ -25,12 +25,14 @@ shuffle_chunk_episodes = 200
 [mdn]
 hidden_size = 256
 mixtures = 5
-# 800 train episodes / batch 32 = 25 steps per epoch; 160 epochs = 4000 steps as in the reference.
+# 800 train episodes / batch 32 = 25 steps per epoch; 160 epochs = the reference 4000 steps.
+# 320 epochs overfit the event head (validation event CE 0.16 -> 0.40), so we keep 160.
 epochs = 160
 batch_size = 32
 learning_rate = 0.001
-# Up-weights the rare catch/miss steps, like restart_factor = 10 in the reference Doom code.
-event_weight = 10.0
+# Up-weights the rare event steps (cf. restart_factor = 10 in the reference Doom code).
+# [miss, none, catch]: random-policy data has 3.4x more misses than catches, so catch gets 10 x 3.4.
+event_weights = [10.0, 1.0, 34.0]
 
 [controller]
 # Reference: cma, population 64 x 16 episodes, sigma 0.1, weight decay 0.01.

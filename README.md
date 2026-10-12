@@ -1,9 +1,63 @@
 # World Models reproduction
 
 A modern PyTorch reproduction of **Ha & Schmidhuber (2018),
-[World Models](https://arxiv.org/abs/1803.10122)**. The repository now contains
-the paper's CarRacing pipeline and retains PixelCatcher as a fast custom-environment
-prototype.
+[World Models](https://arxiv.org/abs/1803.10122)**: the paper's CarRacing experiment,
+plus a new environment (PixelCatcher with a hidden per-episode wind and fog) on which
+the controller is trained both in the real game and inside the learned world model.
+
+## Results
+
+### CarRacing (replication)
+
+Test score over 100 unseen tracks (Gymnasium CarRacing-v3), mean ± std. Paper numbers
+are from Table 1 of the paper (CarRacing-v0, 100 random trials).
+
+| Controller input | Ours | Paper |
+|---|---:|---:|
+| V only, `z` | **658.6 ± 186.5** | 632 ± 251 |
+| Full world model, `[z, h]` | **841.7 ± 94.6** | 906 ± 21 |
+
+- Settings follow the authors' code (see [alignment table](#alignment-with-the-reference-implementation)),
+  except that CMA-ES ran **50 generations instead of 1,800** (36.7 h per mode on 6 cores;
+  the reference took ~46 days on 64).
+- At equal generations our full model tracks the reference: validation score of the
+  CMA mean on 1,024 tracks was 727.8 vs 822.9 at generation 25 and **828.1 vs 867.5 at
+  generation 50** (95%). V only: 480.4 and 637.7.
+- Memory adds **+183** points and halves the spread. Tracks below 600: 27 (V only) vs 5
+  (full model); tracks at 900+: 2 vs 20. The remaining gap to 906 comes mostly from the
+  5 failed tracks (median 870, best 914.7), which the reference's extra 1,750
+  generations would be expected to remove.
+- Held-out diagnostics (1,000 test episodes): VAE reconstruction 4.29; MDN-RNN NLL 0.967
+  nats/dim vs 1.393 for a random-walk baseline (train ≈ validation ≈ test).
+
+### PixelCatcher with hidden wind and fog (new environment)
+
+Real-game test over the same 200 episodes (~2,000 balls) for every row; scripted rows
+read the true game state and serve as reference lines.
+
+| Policy | Trained in | Catch rate | Reward / episode |
+|---|---|---:|---:|
+| Random | – | 24.7% | −6.51 |
+| **V only** | real game, 50 gen | **38.1%** | −3.84 |
+| Scripted: no memory | – | 39.6% | −3.53 |
+| V+M, τ = 1.0 | **dream only**, 50 gen (~1 min) | 58.8% | 0.30 |
+| V+M, τ = 1.25 | **dream only**, 50 gen (~1 min) | 60.7% | 0.69 |
+| **V+M** | real game, 50 gen (~2.4 h) | **63.1%** | 1.17 |
+| Scripted: remembers velocity | – | 73.9% | 3.32 |
+| Scripted: velocity + true wind | – | 99.6% | 8.46 |
+
+- **Memory is necessary and is used**: V only stops at the memoryless ceiling (38.1% vs
+  39.6%); V+M reaches 63.1%. The 25-point gap is far larger than the ~1.5-point standard
+  error.
+- **Dream training transfers**: a controller that never played the real game reaches
+  60.7%, close to 63.1% from real-game training, in ~1 minute instead of ~2.4 hours.
+  τ = 1.25 is slightly better than τ = 1.0, as in the paper, but the difference is
+  within noise.
+- **Not yet learned: inferring the wind.** The best agent is below the
+  velocity-only scripted player (73.9%) and far from the wind-aware one (99.6%).
+- M learned to track the invisible ball: on test data its predicted catch probability
+  is 0.75 on real catches vs 0.21 on real misses (needs class-balanced event weights;
+  with equal weights it always predicted "miss").
 
 ## CarRacing local smoke test
 
@@ -129,55 +183,56 @@ collect with `CorrelatedRandomPolicy` (piecewise-constant random steering/gas, r
 5. Evaluate over held-out environment seeds and ablate memory by comparing
    `[z, h]` against `z` alone.
 
-PixelCatcher is deliberately partially observable from one frame: the ball's
-horizontal velocity is invisible without temporal context. This makes the V-only
-versus V+M comparison scientifically meaningful.
 
-## PixelCatcher prototype
+## New environment: PixelCatcher with hidden wind and fog
 
-Python 3.10–3.12 is recommended (PyTorch wheels may lag brand-new Python releases).
+A 64×64 pixel game: a ball falls from the top and a paddle at the bottom catches it
+(actions: left / stay / right; +1 catch, −1 miss, −0.005 per step; 300 steps ≈ 10 balls).
+
+**Why the original PixelCatcher was not enough.** Its paddle is faster than the ball,
+so simply following the ball's current position catches 100% of balls; memory is
+useless and V only would equal V+M. Two additions make memory matter
+(`world_models/env.py`, both off by default):
+
+- **Fog** (`fog_y = 25`): the ball is invisible in the lower part of the screen, so its
+  landing point must be extrapolated from the trajectory seen before.
+- **Hidden wind** (`wind_range = 0.08`): each episode draws a horizontal acceleration
+  that bends every ball's path and is never shown; it can only be inferred from history.
+
+Scripted players calibrate the design (privileged state, same test seeds): no memory
+39.6%, velocity 73.9%, velocity + wind 99.6%.
+
+**Model and training** (`world_models/catcher_pipeline.py`, `configs/catcher.toml`):
+1,000 random-policy episodes (sticky random actions), 80/10/10 episode split; V and M
+as in CarRacing (z = 32, LSTM 256, 5 mixtures). M additionally predicts the step's event
+(miss / nothing / catch) so the dream can hand out rewards, like the done head of the
+paper's Doom model; event classes are weighted [10, 1, 34] to balance catches against
+the 3.4× more frequent misses. M was trained 160 epochs (the reference's 4,000 steps);
+320 epochs overfit the event head and were discarded on validation. The controller
+follows the paper's Doom code: one tanh output without bias, mapped to left/stay/right
+at ±1/3. CMA-ES uses the reference settings (population 64 × 16 episodes, σ 0.1, weight
+decay 0.01). Dream rollouts are batched inside M with temperature τ (mixture logits / τ,
+noise × √τ) and common random numbers across candidates; dream-trained controllers are
+selected on dream validation only and never see the real game before the test.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-
-python -m world_models.pipeline collect --episodes 200
-python -m world_models.pipeline vae --epochs 10
-python -m world_models.pipeline encode
-python -m world_models.pipeline mdn --epochs 20
-python -m world_models.pipeline controller --generations 60
-python -m world_models.pipeline evaluate --episodes 100
+bash scripts/run_catcher.sh world        # collect, V, M, held-out metrics, scripted baselines
+bash scripts/run_catcher.sh controllers  # dream (τ 1.0, 1.25), real V+M, real V only
 ```
 
-Run the required ablation with the same data/model and a separate controller:
+On an Apple M3 the whole experiment takes ~6 hours, most of it the two real-game
+controllers. Do not edit `scripts/run_catcher.sh` while it runs (bash reads it lazily).
 
-```bash
-python -m world_models.pipeline controller --no-memory --generations 60
-python -m world_models.pipeline evaluate --no-memory --episodes 100
-```
-
-For a quick smoke run, use 10 collection episodes, one epoch, two generations,
-and a population of four. Those settings validate plumbing, not performance.
-
-## Expected experiment table
-
-Report mean ± standard deviation across 100 fixed held-out seeds:
-
-| Controller input | Mean reward | Std. dev. |
-|---|---:|---:|
-| VAE latent `z` | fill after run | fill after run |
-| VAE latent + MDN-RNN state `[z,h]` | fill after run | fill after run |
-
-The primary hypothesis is that `[z,h]` outperforms `z`. Also retain VAE
-reconstructions and held-out MDN negative log likelihood as representation/model
-diagnostics; reward alone cannot establish that the learned world model is sound.
+**Next steps.** Iterative training (re-collect data with a trained controller, which
+catches more balls, then retrain V and M), probing whether `h` encodes the wind, more
+temperatures with repeated seeds, and a harder Breakout-style environment.
 
 ## Scope and differences from the paper
 
-This reproduces the paper's architecture and staged methodology on a small new
-environment. It does **not** claim numerical replication of the published
-CarRacing score (906 ± 21), which used 10,000 rollouts, a 32-D latent, and the
-historical `CarRacing-v0` stack. PixelCatcher uses a 16-D latent, 128-unit LSTM,
-five Gaussian mixture components, and 200 rollouts by default so the experiment
-is practical on a laptop.
+- CarRacing reproduces the architecture, data volume and optimizer settings of the
+  authors' code but runs 50 of 1,800 CMA-ES generations, on Gymnasium CarRacing-v3
+  rather than gym 0.9.4, with a smooth random collection policy (see above).
+- The paper's VizDoom experiment was not reproduced; its dream-training method is
+  applied to PixelCatcher instead.
+- `world_models/pipeline.py` is the earlier small PixelCatcher prototype (16-D latent,
+  128-unit LSTM, no fog or wind) and is superseded by `catcher_pipeline.py`.

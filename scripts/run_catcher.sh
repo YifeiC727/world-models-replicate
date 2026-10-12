@@ -2,7 +2,8 @@
 # PixelCatcher (hidden wind + fog) experiment. Rerunning resumes finished stages.
 #
 #   bash scripts/run_catcher.sh world        # collect -> vae -> encode -> mdn -> heldout -> baselines
-#   bash scripts/run_catcher.sh controllers  # real V+M, real V, dream V+M (tau 1.0, 1.25), each tested in the real game
+#   bash scripts/run_catcher.sh mdn          # only mdn -> heldout -> baselines
+#   bash scripts/run_catcher.sh controllers  # dream V+M (tau 1.0, 1.25), real V+M, real V; all tested in the real game
 #
 # Environment overrides: CONFIG, PY, DEVICE (for V and M).
 set -euo pipefail
@@ -22,17 +23,20 @@ run() {
 }
 
 case "${1:-}" in
-  world)
-    run collect collect
-    run vae vae --device "$DEVICE"
-    run encode encode --device "$DEVICE"
+  world|mdn)
+    if [ "$1" = world ]; then
+      run collect collect
+      run vae vae --device "$DEVICE"
+      run encode encode --device "$DEVICE"
+    fi
     run mdn mdn --device "$DEVICE"
     run heldout heldout --device "$DEVICE"
     run baselines baselines
     ;;
   controllers)
-    for spec in "real_vm --mode real" "real_v --mode real --no-memory" \
-                "dream_vm_t1 --mode dream --temperature 1.0" "dream_vm_t1.25 --mode dream --temperature 1.25"; do
+    # Dream runs first: they take minutes, the real-game runs take hours.
+    for spec in "dream_vm_t1 --mode dream --temperature 1.0" "dream_vm_t1.25 --mode dream --temperature 1.25" \
+                "real_vm --mode real" "real_v --mode real --no-memory"; do
       set -- $spec; name="$1"; shift
       run controller "controller_$name" "$@"
       run evaluate "evaluate_$name" "$@"
