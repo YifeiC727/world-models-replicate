@@ -59,6 +59,26 @@ read the true game state and serve as reference lines.
   is 0.75 on real catches vs 0.21 on real misses (needs class-balanced event weights;
   with equal weights it always predicted "miss").
 
+### Visualizations
+
+![CarRacing training curves vs the authors' log](media/carracing_curves.png)
+
+![PixelCatcher catch rates](media/catcher_results.png)
+
+| | |
+|---|---|
+| **V only vs full model on the same unseen track** (V only leaves the track: 277.6 vs 882.5) | ![compare](media/carracing_compare_1000008.gif) |
+| **What V sees**: real game, the 64×64 input, and the VAE reconstruction | ![real](media/carracing_real_vm_1000004.gif) |
+| **Driving in the dream**: no game engine; M imagines each latent and V decodes it (τ = 1.0) | ![dream](media/carracing_dream_t1_1000004.gif) |
+| **PixelCatcher**: real game with fog (left) vs an episode imagined by M (right) | ![catcher](media/catcher_real_vs_dream_1000003.gif) |
+
+GIFs are short, half-size excerpts. Regenerate the figures with
+`python scripts/plot_results.py` and the videos (full-length MP4 plus GIF, in `media/`)
+with `bash scripts/render_videos.sh`; both need `pip install -e '.[viz]'`. Videos are
+replayed on the local machine: floating-point differences between CPUs change
+individual tracks (local replays of the first 12 test tracks average 867 for V+M and
+633 for V only).
+
 ## CarRacing local smoke test
 
 Install the optional Box2D environment and run the deliberately tiny profile:

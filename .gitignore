@@ -8,3 +8,4 @@ runs/
 references/
 *.pptx
 *.py.tmp
+media/*.mp4

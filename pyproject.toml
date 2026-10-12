@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 carracing = ["gymnasium[box2d]>=1.0"]
+viz = ["imageio>=2.30", "imageio-ffmpeg>=0.5", "matplotlib>=3.8"]
 
 [tool.setuptools.packages.find]
 include = ["world_models*"]
